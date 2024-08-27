@@ -172,7 +172,7 @@ const Links = require("./models/Links.js");
   // Intervalo para verificar os sites a cada 5 minutos
   setInterval(checkSitesAndSendAlert, 5 * 60 * 1000);
 
-  // Conexão com o banco de dados e início do servidor
+
   connectDataBase()
     .then(() => {
       app.listen(port, () => {
