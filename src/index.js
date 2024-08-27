@@ -3,6 +3,7 @@ const nodemailer = require("nodemailer");
 const express = require("express");
 const cors = require("cors");
 const https = require("https");
+const pLimit = require('p-limit'); // Adicionado p-limit
 
 const connectDataBase = require("./database/db.js");
 const Links = require("./models/Links.js");
@@ -15,6 +16,7 @@ app.use(express.json());
 
 let siteStates = {};
 
+// Configuração do transporte de e-mail
 const transporter = nodemailer.createTransport({
   service: "gmail",
   port: 587,
@@ -25,10 +27,12 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+// Agente para ignorar certificados SSL auto-assinados
 const agent = new https.Agent({
   rejectUnauthorized: false,
 });
 
+// Função para enviar mensagem ao Telegram
 async function sendTelegramMessage(message) {
   const telegramBotToken = "7472348745:AAGMqF50_Q4TAWyQgeJySb0tG-njguiJmrI";
   const telegramChatId = "-1002155037998";
@@ -51,10 +55,14 @@ async function sendTelegramMessage(message) {
   }
 }
 
+// Limita a 5 requisições simultâneas
+const limit = pLimit(5);
+
+// Função para verificar o status dos sites e enviar alertas
 async function checkSitesAndSendAlert() {
   try {
     const links = await Links.find();
-    for (const link of links) {
+    const tasks = links.map(link => limit(async () => {
       const siteUrl = link.link;
       try {
         await axios.get(siteUrl, { httpsAgent: agent });
@@ -70,12 +78,14 @@ async function checkSitesAndSendAlert() {
         }
         siteStates[siteUrl] = "Offline";
       }
-    }
+    }));
+    await Promise.all(tasks);
   } catch (error) {
     console.error("Erro ao buscar links do banco de dados:", error.message);
   }
 }
 
+// Função para enviar e-mails
 function sendEmail(subject, text) {
   const mailOptions = {
     from: "seu-email@gmail.com",
@@ -93,16 +103,18 @@ function sendEmail(subject, text) {
   });
 }
 
+// Rota base para verificar se a API está rodando
 app.get("/", (req, res) => {
   console.log("Rota base solicitada");
   res.json({ msg: "API rodando!" });
 });
 
+// Rota para verificar o status dos sites
 app.get("/checkSites", async (req, res) => {
   const results = [];
   try {
     const links = await Links.find();
-    for (const link of links) {
+    const tasks = links.map(link => limit(async () => {
       const siteUrl = link.link;
       try {
         await axios.get(siteUrl, { httpsAgent: agent });
@@ -110,13 +122,15 @@ app.get("/checkSites", async (req, res) => {
       } catch (error) {
         results.push({ url: siteUrl, status: "Offline" });
       }
-    }
+    }));
+    await Promise.all(tasks);
   } catch (error) {
     console.error("Erro ao buscar links do banco de dados:", error.message);
   }
   res.json(results);
 });
 
+// Rota para adicionar um novo link
 app.post("/addLink", async (req, res) => {
   const { link } = req.body;
   if (!link) {
@@ -156,6 +170,7 @@ checkSitesAndSendAlert();
 // Intervalo para verificar os sites a cada 5 minutos
 setInterval(checkSitesAndSendAlert, 5 * 60 * 1000);
 
+// Conexão com o banco de dados e início do servidor
 connectDataBase()
   .then(() => {
     app.listen(port, () => {

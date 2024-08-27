@@ -7,6 +7,8 @@ const linksSchema = new mongoose.Schema({
     created_at: { type: Date, default: Date.now }, // Adiciona o campo created_at com a data atual
 });
 
+// Cria um modelo (Model) chamado "Administradores" usando o esquema definido anteriormente
 const Links = mongoose.model('Links', linksSchema);
 
+// Exporta o modelo "Administradores" para que possa ser importado e utilizado em outros arquivos do aplicativo
 module.exports = Links;
