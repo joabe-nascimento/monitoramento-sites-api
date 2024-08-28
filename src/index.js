@@ -13,7 +13,9 @@ const port = 3001;
 app.use(cors());
 app.use(express.json());
 
-let siteStates = {};
+const siteStates = {};
+const retryAttempts = 3; // Número de tentativas antes de considerar o site como offline
+const retryDelay = 2000; // Tempo de espera entre as tentativas em milissegundos
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -51,46 +53,44 @@ async function sendTelegramMessage(message) {
   }
 }
 
+async function checkSiteStatus(siteUrl) {
+  let attempt = 0;
+  while (attempt < retryAttempts) {
+    try {
+      await axios.get(siteUrl, { httpsAgent: agent });
+      return "Online";
+    } catch (error) {
+      attempt++;
+      console.error(`[${new Date().toLocaleString()}] Tentativa ${attempt} para ${siteUrl} falhou. Erro: ${error.message}`);
+      if (attempt >= retryAttempts) {
+        return "Offline";
+      }
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
+  }
+}
+
 async function checkSitesAndSendAlert() {
   try {
     const links = await Links.find();
     for (const link of links) {
       const siteUrl = link.link;
-      try {
-        await axios.get(siteUrl, { httpsAgent: agent });
-        if (siteStates[siteUrl] === "Offline") {
+      const newState = await checkSiteStatus(siteUrl);
+      
+      if (siteStates[siteUrl] !== newState) {
+        if (newState === "Online") {
           await sendTelegramMessage(`O site ${siteUrl} está de volta online.`);
-        }
-        siteStates[siteUrl] = "Online";
-        console.log(`[${new Date().toLocaleString()}] O site ${siteUrl} está ativo.`);
-      } catch (error) {
-        console.error(`[${new Date().toLocaleString()}] O site ${siteUrl} está inacessível. Erro: ${error.message}`);
-        if (siteStates[siteUrl] !== "Offline") {
+        } else {
           await sendTelegramMessage(`Um ou mais sites estão fora do ar!\n\nO site ${siteUrl} está inacessível.`);
         }
-        siteStates[siteUrl] = "Offline";
+        siteStates[siteUrl] = newState;
       }
+
+      console.log(`[${new Date().toLocaleString()}] O site ${siteUrl} está ${newState}.`);
     }
   } catch (error) {
     console.error("Erro ao buscar links do banco de dados:", error.message);
   }
-}
-
-function sendEmail(subject, text) {
-  const mailOptions = {
-    from: "seu-email@gmail.com",
-    to: "destinatario@gmail.com",
-    subject: subject,
-    text: text,
-  };
-
-  transporter.sendMail(mailOptions, (error, info) => {
-    if (error) {
-      console.error("Erro ao enviar e-mail:", error);
-    } else {
-      console.log("E-mail enviado:", info.response);
-    }
-  });
 }
 
 app.get("/", (req, res) => {
@@ -104,12 +104,8 @@ app.get("/checkSites", async (req, res) => {
     const links = await Links.find();
     for (const link of links) {
       const siteUrl = link.link;
-      try {
-        await axios.get(siteUrl, { httpsAgent: agent });
-        results.push({ url: siteUrl, status: "Online" });
-      } catch (error) {
-        results.push({ url: siteUrl, status: "Offline" });
-      }
+      const status = await checkSiteStatus(siteUrl);
+      results.push({ url: siteUrl, status });
     }
   } catch (error) {
     console.error("Erro ao buscar links do banco de dados:", error.message);
@@ -128,19 +124,14 @@ app.post("/addLink", async (req, res) => {
     await newLink.save();
 
     // Verificar o estado do site e enviar notificação imediatamente
-    try {
-      await axios.get(link, { httpsAgent: agent });
-      siteStates[link] = "Online";
-      console.log(`[${new Date().toLocaleString()}] O site ${link} está ativo.`);
+    const initialState = await checkSiteStatus(link);
+    siteStates[link] = initialState;
 
-      // Enviar mensagem ao Telegram informando que o site foi adicionado e está online
+    // Enviar mensagem ao Telegram informando o estado do site
+    if (initialState === "Online") {
       await sendTelegramMessage(`Novo site adicionado e está online: ${link}`);
-    } catch (error) {
-      console.error(`[${new Date().toLocaleString()}] O site ${link} está inacessível. Erro: ${error.message}`);
-
-      // Enviar mensagem ao Telegram informando que o site foi adicionado mas está offline
+    } else {
       await sendTelegramMessage(`Novo site adicionado, mas está inacessível: ${link}`);
-      siteStates[link] = "Offline";
     }
 
     res.status(201).json({ message: "Link adicionado com sucesso" });
