@@ -16,6 +16,7 @@ app.use(express.json());
 const siteStates = {};
 const retryAttempts = 3; // Número de tentativas antes de considerar o site como offline
 const retryDelay = 2000; // Tempo de espera entre as tentativas em milissegundos
+const slowResponseTime = 5000; // Tempo de resposta acima do qual o site é considerado lento, em milissegundos
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -57,24 +58,40 @@ async function sendTelegramMessage(message) {
 }
 
 async function checkSiteStatus(siteUrl) {
-  try {
-    // Faz a requisição para obter o status dos sites monitorados
-    const response = await axios.get(`https://updown.io/api/checks?api-key=${updownApiKey}`);
-    
-    // Encontra o status do site específico
-    const siteCheck = response.data.find(check => check.url === siteUrl);
+  let attempt = 0;
+  let finalStatus = "Offline";
 
-    if (siteCheck) {
-      const status = siteCheck.down ? "Offline" : "Online";
-      return status;
-    } else {
-      console.error("O site não foi encontrado no Updown.io");
-      return "Unknown";
+  while (attempt < retryAttempts) {
+    try {
+      const response = await axios.get(`https://updown.io/api/checks?api-key=${updownApiKey}`);
+      const siteCheck = response.data.find(check => check.url === siteUrl);
+
+      if (siteCheck) {
+        const status = siteCheck.down ? "Offline" : "Online";
+        const responseTime = siteCheck.response_time; // Tempo de resposta em milissegundos
+
+        if (status === "Online" && responseTime > slowResponseTime) {
+          finalStatus = "Lento";
+        } else {
+          finalStatus = status;
+        }
+        break;
+      } else {
+        console.error("O site não foi encontrado no Updown.io");
+        finalStatus = "Unknown";
+      }
+    } catch (error) {
+      console.error("Erro ao verificar status do site através do Updown.io:", error.message);
     }
-  } catch (error) {
-    console.error("Erro ao verificar status do site através do Updown.io:", error.message);
-    return "Error";
+
+    attempt++;
+    if (finalStatus === "Offline" || finalStatus === "Erro") {
+      console.log(`Tentativa ${attempt} falhou, tentando novamente em ${retryDelay}ms...`);
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
   }
+
+  return finalStatus;
 }
 
 async function checkSitesAndSendAlert() {
@@ -88,7 +105,9 @@ async function checkSitesAndSendAlert() {
         if (newState === "Online") {
           await sendTelegramMessage(`O site ${siteUrl} está de volta online.`);
         } else if (newState === "Offline") {
-          await sendTelegramMessage(`Um ou mais sites estão fora do ar!\n\nO site ${siteUrl} está inacessível.`);
+          await sendTelegramMessage(`O site ${siteUrl} está inacessível.`);
+        } else if (newState === "Lento") {
+          await sendTelegramMessage(`O site ${siteUrl} está funcionando, mas está lento.`);
         } else {
           await sendTelegramMessage(`O site ${siteUrl} tem um status desconhecido. Verifique manualmente.`);
         }
@@ -141,6 +160,8 @@ app.post("/addLink", async (req, res) => {
       await sendTelegramMessage(`Novo site adicionado e está online: ${link}`);
     } else if (initialState === "Offline") {
       await sendTelegramMessage(`Novo site adicionado, mas está inacessível: ${link}`);
+    } else if (initialState === "Lento") {
+      await sendTelegramMessage(`Novo site adicionado e está lento: ${link}`);
     } else {
       await sendTelegramMessage(`O site ${link} foi adicionado, mas seu status é desconhecido.`);
     }
