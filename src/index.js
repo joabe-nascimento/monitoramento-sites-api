@@ -1,33 +1,33 @@
-const axios = require("axios");
-const nodemailer = require("nodemailer");
-const express = require("express");
-const cors = require("cors");
-const https = require("https");
-
-const connectDataBase = require("./database/db.js");
-const Links = require("./models/Links.js");
+require('dotenv').config(); // Para carregar variáveis de ambiente
+const axios = require('axios');
+const nodemailer = require('nodemailer');
+const express = require('express');
+const cors = require('cors');
+const https = require('https');
+const connectDataBase = require('./database/db.js');
+const Links = require('./models/Links.js');
 
 const app = express();
-const port = 3001;
+const port = process.env.PORT || 3001;
 
 app.use(cors());
 app.use(express.json());
 
 const siteStates = {};
-const retryAttempts = 3; // Número de tentativas antes de considerar o site como offline
-const retryDelay = 2000; // Tempo de espera entre as tentativas em milissegundos
+const retryAttempts = 3;
+const retryDelay = 2000;
 
-let lastMessageTime = 0; // Armazena o timestamp da última mensagem enviada
-const minInterval = 10 * 60 * 1000; // 10 minutos em milissegundos
-const maxInterval = 30 * 60 * 1000; // 30 minutos em milissegundos
+let lastMessageTime = 0;
+const minInterval = 10 * 60 * 1000;
+const maxInterval = 30 * 60 * 1000;
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
   port: 587,
   secure: false,
   auth: {
-    user: "seu-email@gmail.com",
-    pass: "sua-senha-do-email",
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
 });
 
@@ -35,7 +35,7 @@ const agent = new https.Agent({
   rejectUnauthorized: false,
 });
 
-const updownApiKey = "ro-Zv63C3gYxJYvrPFuyVDj";
+const updownApiKey = process.env.UPDOWN_API_KEY;
 
 async function sendTelegramMessage(message) {
   const now = Date.now();
@@ -44,23 +44,17 @@ async function sendTelegramMessage(message) {
     if (lastMessageTime === 0 || now - lastMessageTime >= maxInterval) {
       lastMessageTime = now;
 
-      const telegramBotToken = "7472348745:AAGMqF50_Q4TAWyQgeJySb0tG-njguiJmrI";
-      const telegramChatId = "-1002155037998";
+      const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN;
+      const telegramChatId = process.env.TELEGRAM_CHAT_ID;
 
       try {
-        await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            chat_id: telegramChatId,
-            text: message
-          })
+        await axios.post(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+          chat_id: telegramChatId,
+          text: message,
         });
         console.log('Mensagem enviada para o grupo do Telegram com sucesso.');
       } catch (error) {
-        console.error('Erro ao enviar mensagem para o grupo do Telegram:', error);
+        console.error('Erro ao enviar mensagem para o grupo do Telegram:', error.message);
       }
     } else {
       console.log('Aguarde o intervalo mínimo para enviar uma nova mensagem.');
