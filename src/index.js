@@ -31,6 +31,9 @@ const agent = new https.Agent({
   rejectUnauthorized: false,
 });
 
+// Chave de API do Updown.io
+const updownApiKey = "ro-Zv63C3gYxJYvrPFuyVDj";
+
 async function sendTelegramMessage(message) {
   const telegramBotToken = "7472348745:AAGMqF50_Q4TAWyQgeJySb0tG-njguiJmrI";
   const telegramChatId = "-1002155037998";
@@ -54,19 +57,23 @@ async function sendTelegramMessage(message) {
 }
 
 async function checkSiteStatus(siteUrl) {
-  let attempt = 0;
-  while (attempt < retryAttempts) {
-    try {
-      await axios.get(siteUrl, { httpsAgent: agent });
-      return "Online";
-    } catch (error) {
-      attempt++;
-      console.error(`[${new Date().toLocaleString()}] Tentativa ${attempt} para ${siteUrl} falhou. Erro: ${error.message}`);
-      if (attempt >= retryAttempts) {
-        return "Offline";
-      }
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
+  try {
+    // Faz a requisição para obter o status dos sites monitorados
+    const response = await axios.get(`https://updown.io/api/checks?api-key=${updownApiKey}`);
+    
+    // Encontra o status do site específico
+    const siteCheck = response.data.find(check => check.url === siteUrl);
+
+    if (siteCheck) {
+      const status = siteCheck.down ? "Offline" : "Online";
+      return status;
+    } else {
+      console.error("O site não foi encontrado no Updown.io");
+      return "Unknown";
     }
+  } catch (error) {
+    console.error("Erro ao verificar status do site através do Updown.io:", error.message);
+    return "Error";
   }
 }
 
@@ -76,12 +83,14 @@ async function checkSitesAndSendAlert() {
     for (const link of links) {
       const siteUrl = link.link;
       const newState = await checkSiteStatus(siteUrl);
-      
+
       if (siteStates[siteUrl] !== newState) {
         if (newState === "Online") {
           await sendTelegramMessage(`O site ${siteUrl} está de volta online.`);
-        } else {
+        } else if (newState === "Offline") {
           await sendTelegramMessage(`Um ou mais sites estão fora do ar!\n\nO site ${siteUrl} está inacessível.`);
+        } else {
+          await sendTelegramMessage(`O site ${siteUrl} tem um status desconhecido. Verifique manualmente.`);
         }
         siteStates[siteUrl] = newState;
       }
@@ -130,8 +139,10 @@ app.post("/addLink", async (req, res) => {
     // Enviar mensagem ao Telegram informando o estado do site
     if (initialState === "Online") {
       await sendTelegramMessage(`Novo site adicionado e está online: ${link}`);
-    } else {
+    } else if (initialState === "Offline") {
       await sendTelegramMessage(`Novo site adicionado, mas está inacessível: ${link}`);
+    } else {
+      await sendTelegramMessage(`O site ${link} foi adicionado, mas seu status é desconhecido.`);
     }
 
     res.status(201).json({ message: "Link adicionado com sucesso" });
