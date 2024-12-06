@@ -1,4 +1,4 @@
-const axios = require("axios");
+const axios = require("axios"); 
 const nodemailer = require("nodemailer");
 const express = require("express");
 const cors = require("cors");
@@ -16,6 +16,7 @@ app.use(express.json());
 const siteStates = {};
 const retryAttempts = 3; // Número de tentativas antes de considerar o site como offline
 const retryDelay = 2000; // Tempo de espera entre as tentativas em milissegundos
+const alertInterval = 10 * 60 * 1000; // Intervalo de 10 minutos para repetir alertas
 
 const transporter = nodemailer.createTransport({
   service: "gmail",
@@ -76,14 +77,23 @@ async function checkSitesAndSendAlert() {
     for (const link of links) {
       const siteUrl = link.link;
       const newState = await checkSiteStatus(siteUrl);
-      
-      if (siteStates[siteUrl] !== newState) {
+
+      if (siteStates[siteUrl]?.state !== newState) {
+        // Estado mudou, enviar mensagem de notificação
         if (newState === "Online") {
           await sendTelegramMessage(`O site ${siteUrl} está de volta online.`);
         } else {
           await sendTelegramMessage(`Um ou mais sites estão fora do ar!\n\nO site ${siteUrl} está inacessível.`);
         }
-        siteStates[siteUrl] = newState;
+
+        siteStates[siteUrl] = { state: newState, lastAlert: Date.now() };
+      } else if (newState === "Offline") {
+        // Estado é "Offline", repetir alerta se passou o intervalo
+        const lastAlert = siteStates[siteUrl]?.lastAlert || 0;
+        if (Date.now() - lastAlert >= alertInterval) {
+          await sendTelegramMessage(`O site ${siteUrl} continua inacessível.`);
+          siteStates[siteUrl].lastAlert = Date.now();
+        }
       }
 
       console.log(`[${new Date().toLocaleString()}] O site ${siteUrl} está ${newState}.`);
@@ -125,7 +135,7 @@ app.post("/addLink", async (req, res) => {
 
     // Verificar o estado do site e enviar notificação imediatamente
     const initialState = await checkSiteStatus(link);
-    siteStates[link] = initialState;
+    siteStates[link] = { state: initialState, lastAlert: Date.now() };
 
     // Enviar mensagem ao Telegram informando o estado do site
     if (initialState === "Online") {
